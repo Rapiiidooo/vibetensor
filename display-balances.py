@@ -1,10 +1,10 @@
 """Show TAO balances (free + staked) across all local wallets.
 
 Usage:
-    python balances.py
-    python balances.py --details
-    python balances.py --wallets wallet1 wallet2
-    python balances.py --exclude-wallets wallet3
+    python display-balances.py
+    python display-balances.py --details
+    python display-balances.py --wallets wallet1 wallet2
+    python display-balances.py --exclude-wallets wallet3
 """
 
 import argparse
@@ -172,14 +172,23 @@ async def main():
 
         # Build table
         console = Console()
-        table = Table(title="TAO Balances")
-        table.add_column("Name", style="green")
-        table.add_column("Coldkey", style="blue")
-        table.add_column("Free", justify="right", style="red")
-        table.add_column("Staked", justify="right", style="blue")
-        table.add_column("Staked (slippage)", justify="right", style="yellow")
-        table.add_column("Total", justify="right", style="green")
-        table.add_column("USD", justify="right", style="magenta")
+        table = Table(
+            title="[bold bright_white]TAO Balances[/]",
+            title_style="bold bright_white",
+            border_style="bright_blue",
+            header_style="bold bright_cyan",
+
+            padding=(0, 1),
+        )
+        table.add_column("Name", style="bold bright_green")
+        table.add_column("Coldkey", style="cyan")
+        if args.details:
+            table.add_column("Hotkey", style="cyan", no_wrap=True)
+        table.add_column("Free", justify="right", style="bright_red")
+        table.add_column("Staked", justify="right", style="bright_blue")
+        table.add_column("Staked (slippage)", justify="right", style="bright_yellow")
+        table.add_column("Total", justify="right", style="bold bright_green")
+        table.add_column("USD", justify="right", style="bold bright_magenta")
 
         grand_free = 0.0
         grand_staked = 0.0
@@ -202,15 +211,20 @@ async def main():
             grand_staked += staked
             grand_slippage += slippage
 
-            table.add_row(
+            row = [
                 name,
                 coldkey,
+            ]
+            if args.details:
+                row.append("")
+            row += [
                 f"{free:,.3f}",
                 f"{staked:,.3f}",
                 f"{slippage:,.3f} τ",
                 f"{total:,.3f}",
                 f"${usd:,.2f}",
-            )
+            ]
+            table.add_row(*row)
 
             if args.details:
                 for stake in sorted(stakes, key=lambda s: s.netuid):
@@ -229,35 +243,37 @@ async def main():
                         continue
 
                     identity = await resolver.resolve(stake.hotkey_ss58)
-                    hotkey_short = f"{stake.hotkey_ss58[:8]}..."
-                    label = f"  └─ sn{stake.netuid} {hotkey_short}"
+                    label = f"  └─ sn{stake.netuid}"
                     if identity:
                         label += f" ({identity})"
+                    hotkey_display = stake.hotkey_ss58
 
                     table.add_row(
                         label,
                         "",
+                        hotkey_display,
                         "",
                         f"{stake.stake.tao:,.3f} α",
                         f"{float(tao_val.tao):,.3f} τ",
                         "",
                         f"${stake_usd:,.2f}",
-                        style="dim",
+                        style="dim italic",
                     )
 
         # Total row
         table.add_section()
         grand_total = grand_free + grand_slippage
-        table.add_row(
-            "TOTAL",
-            "",
+        total_row = ["TOTAL", ""]
+        if args.details:
+            total_row.append("")
+        total_row += [
             f"{grand_free:,.3f}",
             f"{grand_staked:,.3f}",
             f"{grand_slippage:,.3f} τ",
             f"{grand_total:,.3f}",
             f"${grand_total * tao_price:,.2f}",
-            style="bold",
-        )
+        ]
+        table.add_row(*total_row, style="bold bright_white")
 
         console.print(table)
 

@@ -1,6 +1,6 @@
 # Transfer entire TAO balance from one wallet to another
-# python balance-transfer-all.py --wallet-from <SENDER> --wallet-to <RECEIVER> --network finney
-# python balance-transfer-all.py --wallet-from <SENDER> --ss58-to <SS58_ADDRESS> --network finney
+# python exec-balance-transfer-all.py --wallet-from <SENDER> --wallet-to <RECEIVER> --network finney
+# python exec-balance-transfer-all.py --wallet-from <SENDER> --ss58-to <SS58_ADDRESS> --network finney
 
 import argparse
 import asyncio

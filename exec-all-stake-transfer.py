@@ -1,6 +1,6 @@
 # Transfer all alpha tokens (including root) from one coldkey to another
-# python stake-transfer-to.py --wallet <WALLET> --network test --dest-coldkey <DEST> [--standalone]
-# python stake-transfer-to.py --wallet <WALLET> --network finney --dest-coldkey <DEST>
+# python exec-all-stake-transfer.py --wallet <WALLET> --network test --dest-coldkey <DEST> [--standalone]
+# python exec-all-stake-transfer.py --wallet <WALLET> --network finney --dest-coldkey <DEST>
 
 import argparse
 import csv
@@ -24,7 +24,7 @@ logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {messag
 # ------------------------------------------------------------------
 # Output directory
 # ------------------------------------------------------------------
-OUTPUT_DIR = Path(__file__).resolve().parent / "stake-transfer-to"
+OUTPUT_DIR = Path(__file__).resolve().parent / "exec-all-stake-transfer"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # ------------------------------------------------------------------
