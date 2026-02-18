@@ -3,5 +3,6 @@ bittensor-wallet @ git+https://github.com/opentensor/btwallet.git@v4.0.1
 loguru
 python-dotenv
 requests
+rich
 web3
 matplotlib
