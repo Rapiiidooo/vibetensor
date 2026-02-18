@@ -1,0 +1,7 @@
+bittensor @ git+https://github.com/opentensor/bittensor.git@v10.1.0
+bittensor-wallet @ git+https://github.com/opentensor/btwallet.git@v4.0.1
+loguru
+python-dotenv
+requests
+web3
+matplotlib
