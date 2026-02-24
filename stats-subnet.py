@@ -98,6 +98,13 @@ async def main():
         curr_block = metagraph.block
         uids = metagraph.uids.tolist()
 
+        # Trust scores: not populated on AsyncMetagraph, fetch from MetagraphInfo
+        if hasattr(metagraph, 'trust') and len(getattr(metagraph, 'trust', [])) > 0:
+            trust_scores = metagraph.trust
+        else:
+            meta_info = await subtensor.get_metagraph_info(netuid=args.netuid, block=args.block)
+            trust_scores = meta_info.trust if meta_info else []
+
         # Pool info for alpha→TAO conversion
         pool = metagraph.pool
         alpha_token_price = pool.tao_in / pool.alpha_in if pool.alpha_in > 0 else 0.0
@@ -129,7 +136,7 @@ async def main():
             calc_last_update = int(curr_block - last_update)
 
             emission = float(metagraph.E[uid])
-            trust = float(metagraph.trust[uid])
+            trust = float(trust_scores[uid]) if uid < len(trust_scores) else 0.0
             vtrust = float(metagraph.validator_trust[uid])
             is_validator = vtrust > 0.01
 
