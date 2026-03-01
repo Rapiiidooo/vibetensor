@@ -24,7 +24,7 @@ logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {messag
 # ------------------------------------------------------------------
 # Output directory
 # ------------------------------------------------------------------
-OUTPUT_DIR = Path(__file__).resolve().parent / "exec-all-stake-transfer"
+OUTPUT_DIR = Path(__file__).resolve().parent / "logs" / "exec-all-stake-transfer"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # ------------------------------------------------------------------
