@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+
+# Secrets
+.env
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# JetBrains
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Private projects
+private/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
