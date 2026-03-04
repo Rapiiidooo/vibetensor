@@ -1,0 +1,26 @@
+network: finney
+wallet: wallet-name
+hotkey: 5...
+tolerance: 0.02
+
+# Global defaults (inherited by subnets that don't override)
+# tempo: 3600                # fixed
+tempo_min: 3300              # random range
+tempo_max: 3900
+
+# Optional limits
+# max_tao: 50.0
+# max_iterations: 100
+
+subnets:
+  - netuid: 39
+    amount: 0.25
+    tempo: 1800              # override: fixed 30min
+
+  - netuid: 64
+    amount: 1.0
+    # inherits global tempo
+
+  - netuid: 120
+    amount: 0.25
+    # inherits global tempo

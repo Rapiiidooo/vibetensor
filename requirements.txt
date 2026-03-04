@@ -4,5 +4,6 @@ loguru
 python-dotenv
 requests
 rich
+pyyaml
 web3
 matplotlib
