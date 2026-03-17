@@ -1,5 +1,8 @@
 bittensor @ git+https://github.com/opentensor/bittensor.git@v10.1.0
 bittensor-wallet @ git+https://github.com/opentensor/btwallet.git@v4.0.1
+bittensor-drand @ git+https://github.com/opentensor/bittensor-drand.git@v1.3.0
+bittensor-cli @ git+https://github.com/opentensor/btcli.git@v9.18.1
+
 loguru
 python-dotenv
 requests

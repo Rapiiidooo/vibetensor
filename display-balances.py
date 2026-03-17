@@ -127,6 +127,7 @@ async def main():
     parser.add_argument("--wallets", nargs="*", default=[], help="Only show these wallets")
     parser.add_argument("--exclude-wallets", nargs="*", default=[], dest="exclude_wallets", help="Exclude these wallets")
     parser.add_argument("--min-usd", type=float, default=DISPLAYED_MIN_USD_VALUE, help="Min USD to show in details")
+    parser.add_argument("--all", action="store_true", help="Show all wallets including empty ones")
     parser.add_argument("--network", default="finney", choices=["finney", "test"], help="Bittensor network")
     args = parser.parse_args()
 
@@ -202,7 +203,7 @@ async def main():
             staked, slippage, stakes = stake_results.get(coldkey, (0.0, 0.0, []))
 
             total = free + slippage
-            if total <= 0.001:
+            if total <= 0.001 and not args.all:
                 continue
 
             usd = total * tao_price
@@ -239,7 +240,7 @@ async def main():
                     tao_val = pool.alpha_to_tao(alpha_value)
                     stake_usd = float(tao_val.tao) * tao_price
 
-                    if stake_usd < args.min_usd:
+                    if not args.all and stake_usd < args.min_usd:
                         continue
 
                     identity = await resolver.resolve(stake.hotkey_ss58)
