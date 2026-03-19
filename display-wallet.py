@@ -1,9 +1,9 @@
 """Show all balances for a single wallet with full precision.
 
 Usage:
-    python display-wallet-balances.py --wallet <name>
-    python display-wallet-balances.py --ss58 <address>
-    python display-wallet-balances.py --wallet <name> --network test
+    python display-wallet.py --wallet <name>
+    python display-wallet.py --ss58 <address>
+    python display-wallet.py --wallet <name> --network test
 """
 
 import argparse

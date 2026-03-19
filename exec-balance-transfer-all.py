@@ -16,14 +16,22 @@ logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {messag
 
 async def main():
     parser = argparse.ArgumentParser(description="Transfer entire TAO balance between wallets")
-    parser.add_argument("--wallet-from", required=True, dest="wallet_from", help="Sender wallet name")
+    parser.add_argument("--wallet-from", dest="wallet_from", help="Sender wallet name")
     parser.add_argument("--wallet-to", dest="wallet_to", help="Receiver wallet name")
     parser.add_argument("--ss58-to", dest="ss58_to", help="Receiver SS58 address (alternative to --wallet-to)")
     parser.add_argument("--network", default="finney", choices=["finney", "test"], help="Bittensor network")
     args = parser.parse_args()
 
+    # Interactive mode: prompt for missing values
+    if not args.wallet_from:
+        args.wallet_from = input("Wallet from (name): ").strip()
+
     if not args.wallet_to and not args.ss58_to:
-        parser.error("You must specify either --wallet-to or --ss58-to")
+        choice = input("Destination — wallet name (w) or SS58 address (s)? [w/s]: ").strip().lower()
+        if choice == "s":
+            args.ss58_to = input("SS58 address: ").strip()
+        else:
+            args.wallet_to = input("Wallet to (name): ").strip()
 
     if args.wallet_to and args.ss58_to:
         parser.error("Specify only one of --wallet-to or --ss58-to, not both")
