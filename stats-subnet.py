@@ -29,6 +29,7 @@ logger.remove()
 logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {message}")
 
 DEFAULT_WALLET_PATH = Path("~/.bittensor/wallets").expanduser()
+U16_MAX = 65535
 
 
 # ---------------------------------------------------------------------
@@ -58,6 +59,34 @@ def discover_coldkeys(wallet_path: Path = DEFAULT_WALLET_PATH) -> set[str]:
         except Exception:
             continue
     return coldkeys
+
+
+async def get_delegate_take(subtensor: AsyncSubtensor, hotkey_ss58: str) -> float:
+    try:
+        result = await subtensor.substrate.query(
+            module="SubtensorModule",
+            storage_function="Delegates",
+            params=[hotkey_ss58],
+        )
+        if result is not None:
+            return (int(result.value) / U16_MAX) * 100
+    except Exception:
+        pass
+    return 0.0
+
+
+async def get_childkey_take(subtensor: AsyncSubtensor, hotkey_ss58: str, netuid: int) -> float:
+    try:
+        result = await subtensor.substrate.query(
+            module="SubtensorModule",
+            storage_function="ChildkeyTake",
+            params=[hotkey_ss58, netuid],
+        )
+        if result is not None:
+            return (int(result.value) / U16_MAX) * 100
+    except Exception:
+        pass
+    return 0.0
 
 
 # ---------------------------------------------------------------------
@@ -185,12 +214,25 @@ async def main():
                 "hotkey": display_hotkey,
                 "reg_since": since_reg,
                 "is_mine": is_mine,
+                "take": None,
+                "childkey_take": None,
             }
 
             if is_validator:
                 validators.append(row)
             else:
                 miners.append(row)
+
+        # Fetch takes for validators concurrently
+        async def _fetch_takes(row):
+            dt, ct = await asyncio.gather(
+                get_delegate_take(subtensor, row["hotkey"]),
+                get_childkey_take(subtensor, row["hotkey"], args.netuid),
+            )
+            row["take"] = dt
+            row["childkey_take"] = ct
+
+        await asyncio.gather(*[_fetch_takes(r) for r in validators])
 
         # Sort
         if args.sort == "emission":
@@ -223,6 +265,8 @@ async def main():
             table.add_column("$/d", justify="right", style="bright_magenta")
             table.add_column("Trust", justify="right")
             table.add_column("VTrust", justify="right")
+            table.add_column("Take %", justify="right")
+            table.add_column("CK Take %", justify="right")
             table.add_column("Coldkey", style="bright_white")
             table.add_column("Hotkey", style="cyan", no_wrap=True)
             table.add_column("Reg Since")
@@ -244,6 +288,8 @@ async def main():
                     f"{r['usd_d']:.2f}",
                     f"{r['trust']:.{decimals}f}",
                     f"{r['vtrust']:.{decimals}f}",
+                    f"{r['take']:.1f}" if r.get("take") is not None else "",
+                    f"{r['childkey_take']:.1f}" if r.get("childkey_take") is not None else "",
                     r["coldkey"],
                     r["hotkey"],
                     r["reg_since"],
