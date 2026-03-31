@@ -1,6 +1,6 @@
 # Transfer all alpha tokens (including root) from one coldkey to another
 # python exec-all-stake-transfer.py --wallet <WALLET> --network test --dest-coldkey <DEST> [--standalone]
-# python exec-all-stake-transfer.py --wallet <WALLET> --network finney --dest-coldkey <DEST>
+# python exec-all-stake-transfer.py --wallet <WALLET> --network finney --dest-coldkey <DEST> [--convert-transfer-disabled-to-root]
 
 import argparse
 import csv
@@ -54,7 +54,7 @@ def is_transfer_enabled(subtensor: Subtensor, netuid: int, cache: dict[int, bool
     cache[netuid] = enabled
 
     if not enabled:
-        logger.warning(f"transfers_disabled | skipping subnet {netuid}")
+        logger.warning(f"transfers_disabled | subnet {netuid}")
 
     return enabled
 
@@ -86,14 +86,13 @@ def build_snapshot(included_rows: list[dict], tao_price: float) -> dict:
 
 
 def collect_eligible_stakes(stakes, dynamic_info_by_netuid, subtensor, transfer_enabled_cache):
-    """Single-pass collection of eligible stakes with their computed values."""
-    eligible = []
+    """Single-pass collection of stakes separated by transfer eligibility."""
+    transferable = []
+    transfer_disabled = []
+
     for stake in stakes:
         netuid = stake.netuid
         if netuid in SUBNETS_TO_SKIP:
-            continue
-
-        if not is_transfer_enabled(subtensor, netuid, transfer_enabled_cache):
             continue
 
         pool = dynamic_info_by_netuid.get(netuid)
@@ -104,13 +103,19 @@ def collect_eligible_stakes(stakes, dynamic_info_by_netuid, subtensor, transfer_
         if stake.stake.tao < MIN_ALPHA or tao_value.tao < MIN_TAO:
             continue
 
-        eligible.append({
+        entry = {
             "stake": stake,
             "netuid": netuid,
             "tao_value": tao_value,
             "pool": pool,
-        })
-    return eligible
+        }
+
+        if is_transfer_enabled(subtensor, netuid, transfer_enabled_cache):
+            transferable.append(entry)
+        else:
+            transfer_disabled.append(entry)
+
+    return transferable, transfer_disabled
 
 
 def log_portfolio_summary(portfolio_snapshot, tao_price):
@@ -206,12 +211,9 @@ def save_accounting_csv(
     return filename
 
 
-def main(wallet_name: str, network: str, dest_coldkey: str, standalone: bool):
+def main(wallet_name: str, network: str, dest_coldkey: str, standalone: bool, convert_disabled_to_root: bool):
     subtensor = Subtensor(network=network, log_verbose=False)
     wallet = Wallet(name=wallet_name)
-
-    if wallet.coldkey_file.is_encrypted():
-        wallet.unlock_coldkey()
 
     origin_coldkey = wallet.coldkeypub.ss58_address
 
@@ -237,24 +239,37 @@ def main(wallet_name: str, network: str, dest_coldkey: str, standalone: bool):
 
     transfer_enabled_cache: dict[int, bool] = {}
 
-    eligible = collect_eligible_stakes(stakes, dynamic_info_by_netuid, subtensor, transfer_enabled_cache)
+    transferable, transfer_disabled = collect_eligible_stakes(stakes, dynamic_info_by_netuid, subtensor, transfer_enabled_cache)
+    swap_eligible = transfer_disabled if convert_disabled_to_root else []
 
-    if not eligible:
+    if not transferable and not swap_eligible:
         logger.error("No eligible stake transfers found")
         return
 
-    included_rows = [
-        {
+    def _to_row(e):
+        return {
             "netuid": e["netuid"],
             "hotkey": e["stake"].hotkey_ss58,
             "alpha_tao": float(e["stake"].stake.tao),
             "tao": float(e["tao_value"].tao),
         }
-        for e in eligible
-    ]
+
+    included_rows = [_to_row(e) for e in transferable] + [_to_row(e) for e in swap_eligible]
 
     portfolio_snapshot = build_snapshot(included_rows, tao_price)
     log_portfolio_summary(portfolio_snapshot, tao_price)
+
+    if swap_eligible:
+        logger.info(f"Swap via root       : {len(swap_eligible)} stakes (transfer disabled on origin subnet)")
+        for e in swap_eligible:
+            logger.info(
+                f"  subnet {e['netuid']:>3} | {e['stake'].hotkey_ss58} | "
+                f"~{float(e['tao_value'].tao):.6f} TAO"
+            )
+
+    # Unlock after preview so user sees the summary before entering password
+    if wallet.coldkey_file.is_encrypted():
+        wallet.unlock_coldkey()
 
     # ==================================================================
     # STANDALONE MODE
@@ -263,7 +278,9 @@ def main(wallet_name: str, network: str, dest_coldkey: str, standalone: bool):
         input("Press Enter to start standalone transfers...")
 
         results = []
-        for e in eligible:
+
+        # Direct transfers
+        for e in transferable:
             stake = e["stake"]
             netuid = e["netuid"]
             tao_value = e["tao_value"]
@@ -304,6 +321,80 @@ def main(wallet_name: str, network: str, dest_coldkey: str, standalone: bool):
 
             time.sleep(0.2)
 
+        # Swap via root for transfer-disabled subnets
+        for e in swap_eligible:
+            stake = e["stake"]
+            netuid = e["netuid"]
+            tao_value = e["tao_value"]
+
+            # Step 1: move_stake from subnet → root
+            logger.info(
+                f"Swap to root | netuid={netuid} | hotkey={stake.hotkey_ss58} | "
+                f"alpha={stake.stake} | tao≈{tao_value}"
+            )
+
+            move_call = subtensor.substrate.compose_call(
+                call_module="SubtensorModule",
+                call_function="move_stake",
+                call_params={
+                    "origin_hotkey": stake.hotkey_ss58,
+                    "destination_hotkey": stake.hotkey_ss58,
+                    "origin_netuid": netuid,
+                    "destination_netuid": 0,
+                    "alpha_amount": int(stake.stake.rao),
+                },
+            )
+            extrinsic = subtensor.substrate.create_signed_extrinsic(call=move_call, keypair=wallet.coldkey)
+            response = subtensor.substrate.submit_extrinsic(extrinsic, wait_for_inclusion=True,
+                                                            wait_for_finalization=True)
+            response.process_events()
+
+            if not response.is_success:
+                logger.error(f"Swap to root failed | netuid={netuid} | error={response.error_message}")
+                results.append({
+                    "netuid": netuid,
+                    "hotkey": stake.hotkey_ss58,
+                    "alpha_tao": float(stake.stake.tao),
+                    "tao_value": float(tao_value.tao),
+                    "status": "failed",
+                })
+                continue
+
+            time.sleep(0.2)
+
+            # Step 2: transfer_stake from root → dest
+            logger.info(f"Transfer from root | hotkey={stake.hotkey_ss58} | ~{tao_value} TAO")
+
+            transfer_call = subtensor.substrate.compose_call(
+                call_module="SubtensorModule",
+                call_function="transfer_stake",
+                call_params={
+                    "destination_coldkey": dest_coldkey,
+                    "hotkey": stake.hotkey_ss58,
+                    "origin_netuid": 0,
+                    "destination_netuid": 0,
+                    "alpha_amount": int(tao_value.rao),
+                },
+            )
+            extrinsic = subtensor.substrate.create_signed_extrinsic(call=transfer_call, keypair=wallet.coldkey)
+            response = subtensor.substrate.submit_extrinsic(extrinsic, wait_for_inclusion=True,
+                                                            wait_for_finalization=True)
+            response.process_events()
+
+            status = "success" if response.is_success else "failed"
+            if not response.is_success:
+                logger.error(f"Transfer from root failed | hotkey={stake.hotkey_ss58} | error={response.error_message}")
+
+            results.append({
+                "netuid": netuid,
+                "hotkey": stake.hotkey_ss58,
+                "alpha_tao": float(stake.stake.tao),
+                "tao_value": float(tao_value.tao),
+                "status": status,
+            })
+
+            time.sleep(0.2)
+
         print_report(results, origin_coldkey, dest_coldkey, network, "standalone", tao_price)
         save_accounting_csv(results, origin_coldkey, dest_coldkey, network, "standalone", tao_price)
         return
@@ -312,7 +403,9 @@ def main(wallet_name: str, network: str, dest_coldkey: str, standalone: bool):
     # BATCH MODE (force_batch: continues even if individual calls fail)
     # ==================================================================
     calls = []
-    for idx, e in enumerate(eligible):
+
+    # Direct transfers
+    for idx, e in enumerate(transferable):
         stake = e["stake"]
         netuid = e["netuid"]
         tao_value = e["tao_value"]
@@ -332,6 +425,46 @@ def main(wallet_name: str, network: str, dest_coldkey: str, standalone: bool):
                     "origin_netuid": netuid,
                     "destination_netuid": netuid,
                     "alpha_amount": int(stake.stake.rao),
+                },
+            )
+        )
+
+    # Swap via root for transfer-disabled subnets (move to root, then transfer)
+    for idx, e in enumerate(swap_eligible, start=len(transferable)):
+        stake = e["stake"]
+        netuid = e["netuid"]
+        tao_value = e["tao_value"]
+
+        logger.info(
+            f"[{idx:03}] queued swap→root | netuid={netuid} | hotkey={stake.hotkey_ss58} | "
+            f"alpha={stake.stake} | tao≈{tao_value}"
+        )
+
+        # Step 1: move_stake from subnet → root
+        calls.append(
+            subtensor.substrate.compose_call(
+                call_module="SubtensorModule",
+                call_function="move_stake",
+                call_params={
+                    "origin_hotkey": stake.hotkey_ss58,
+                    "destination_hotkey": stake.hotkey_ss58,
+                    "origin_netuid": netuid,
+                    "destination_netuid": 0,
+                    "alpha_amount": int(stake.stake.rao),
+                },
+            )
+        )
+        # Step 2: transfer_stake from root → dest
+        calls.append(
+            subtensor.substrate.compose_call(
+                call_module="SubtensorModule",
+                call_function="transfer_stake",
+                call_params={
+                    "destination_coldkey": dest_coldkey,
+                    "hotkey": stake.hotkey_ss58,
+                    "origin_netuid": 0,
+                    "destination_netuid": 0,
+                    "alpha_amount": int(tao_value.rao),
                 },
             )
         )
@@ -360,7 +493,16 @@ def main(wallet_name: str, network: str, dest_coldkey: str, standalone: bool):
             "tao_value": float(e["tao_value"].tao),
             "status": batch_status,
         }
-        for e in eligible
+        for e in transferable
+    ] + [
+        {
+            "netuid": e["netuid"],
+            "hotkey": e["stake"].hotkey_ss58,
+            "alpha_tao": float(e["stake"].stake.tao),
+            "tao_value": float(e["tao_value"].tao),
+            "status": batch_status,
+        }
+        for e in swap_eligible
     ]
 
     print_report(results, origin_coldkey, dest_coldkey, network, "batch", tao_price)
@@ -373,6 +515,8 @@ if __name__ == "__main__":
     parser.add_argument("--network", required=True, choices=["finney", "test"], default="finney")
     parser.add_argument("--dest-coldkey", required=True)
     parser.add_argument("--standalone", action="store_true")
+    parser.add_argument("--convert-transfer-disabled-to-root", action="store_true",
+                        help="Swap stakes on transfer-disabled subnets to root (subnet 0), then transfer")
 
     args = parser.parse_args()
-    main(args.wallet, args.network, args.dest_coldkey, args.standalone)
+    main(args.wallet, args.network, args.dest_coldkey, args.standalone, args.convert_transfer_disabled_to_root)
