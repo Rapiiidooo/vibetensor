@@ -1,6 +1,7 @@
 # python seed-gen-basic.py --prefix 5Gurl --count 5
 # python seed-gen-basic.py --suffix abc --count 3 --case-sensitive
 # python seed-gen-basic.py --prefix Test --suffix XYZ --count 1 --output vanity.csv
+# python seed-gen-basic.py --contains taoswap --count 1
 
 import argparse
 import csv
@@ -29,7 +30,7 @@ def validate_vanity(value: str, label: str):
         )
 
 
-def matches(address: str, prefix: str | None, suffix: str | None, case_sensitive: bool) -> bool:
+def matches(address: str, prefix: str | None, suffix: str | None, contains: str | None, case_sensitive: bool) -> bool:
     addr = address if case_sensitive else address.lower()
     if prefix:
         p = prefix if case_sensitive else prefix.lower()
@@ -39,12 +40,17 @@ def matches(address: str, prefix: str | None, suffix: str | None, case_sensitive
         s = suffix if case_sensitive else suffix.lower()
         if not addr.endswith(s):
             return False
+    if contains:
+        c = contains if case_sensitive else contains.lower()
+        if c not in addr[SS58_PREFIX_LEN:]:
+            return False
     return True
 
 
-def main(prefix: str | None, suffix: str | None, count: int, case_sensitive: bool, output: Path):
+def main(prefix: str | None, suffix: str | None, contains: str | None, count: int, case_sensitive: bool, output: Path):
     logger.info(f"Prefix         : {prefix or '-'}")
     logger.info(f"Suffix         : {suffix or '-'}")
+    logger.info(f"Contains       : {contains or '-'}")
     logger.info(f"Case sensitive : {case_sensitive}")
     logger.info(f"Count          : {count}")
     logger.info(f"Output         : {output}")
@@ -69,7 +75,7 @@ def main(prefix: str | None, suffix: str | None, count: int, case_sensitive: boo
                 rate = attempts / (time.monotonic() - t0)
                 logger.info(f"{attempts:,} tested | {generated}/{count} found | {rate:.0f} addr/s")
 
-            if matches(keypair.ss58_address, prefix, suffix, case_sensitive):
+            if matches(keypair.ss58_address, prefix, suffix, contains, case_sensitive):
                 generated += 1
                 writer.writerow([keypair.ss58_address, mnemonic])
                 f.flush()
@@ -88,25 +94,29 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate vanity SS58 addresses with prefix/suffix matching")
     parser.add_argument("--prefix", type=str, default=None, help="Desired prefix (after SS58 network prefix)")
     parser.add_argument("--suffix", type=str, default=None, help="Desired suffix")
+    parser.add_argument("--contains", type=str, default=None, help="Substring to find anywhere in the address (after SS58 network prefix)")
     parser.add_argument("--count", type=int, default=5, help="Number of addresses to generate (default: 5)")
     parser.add_argument("--case-sensitive", action="store_true", help="Case-sensitive matching (default: case-insensitive)")
     parser.add_argument("--output", type=str, default=DEFAULT_OUTPUT, help=f"Output CSV file (default: {DEFAULT_OUTPUT})")
     args = parser.parse_args()
 
-    if not args.prefix and not args.suffix:
-        parser.error("At least one of --prefix or --suffix is required")
+    if not args.prefix and not args.suffix and not args.contains:
+        parser.error("At least one of --prefix, --suffix or --contains is required")
 
     try:
         if args.prefix:
             validate_vanity(args.prefix, "prefix")
         if args.suffix:
             validate_vanity(args.suffix, "suffix")
+        if args.contains:
+            validate_vanity(args.contains, "contains")
     except ValueError as e:
         parser.error(str(e))
 
     main(
         prefix=args.prefix,
         suffix=args.suffix,
+        contains=args.contains,
         count=args.count,
         case_sensitive=args.case_sensitive,
         output=Path(args.output),
