@@ -1,0 +1,29 @@
+# python advanced-dca.py --strategy strategies/pro-miners.yml
+
+network: finney
+wallet: hot-trading
+hotkey: 5CszMVts9ueMUSKdAwLFSLT7u4oyxN7fUBpo8Z3ETw1ggMUV
+tolerance: 0.02
+
+tempo_min: 2000              # random range
+tempo_max: 3000
+
+subnets:
+
+  - netuid: 4
+    amount: 0.2
+
+  - netuid: 8
+    amount: 0.2
+
+  - netuid: 9
+    amount: 0.2
+
+  - netuid: 51
+    amount: 0.2
+
+  - netuid: 64
+    amount: 1.0
+
+  - netuid: 120
+    amount: 0.2

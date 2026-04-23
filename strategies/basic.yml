@@ -1,0 +1,40 @@
+# python advanced-dca.py --strategy strategies/basic.yml
+
+network: finney
+wallet: hot-trading
+hotkey: 5CszMVts9ueMUSKdAwLFSLT7u4oyxN7fUBpo8Z3ETw1ggMUV
+tolerance: 0.05
+
+# Global defaults (inherited by subnets that don't override)
+# tempo: 3600                # fixed
+tempo_min: 200              # random range
+tempo_max: 500
+
+subnets:
+
+  - netuid: 3
+    amount: 0.1
+
+  - netuid: 4
+    amount: 0.1
+
+  - netuid: 9
+    amount: 0.1
+
+  - netuid: 39
+    amount: 0.1
+
+  - netuid: 44
+    amount: 0.2
+
+  - netuid: 51
+    amount: 0.1
+
+  - netuid: 64
+    amount: 5.0
+
+  - netuid: 75
+    amount: 0.1
+
+  - netuid: 93
+    amount: 0.1
