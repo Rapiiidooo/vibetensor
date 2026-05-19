@@ -99,7 +99,7 @@ async def main():
     parser.add_argument("--netuid", type=int, required=True, help="Subnet ID")
     parser.add_argument("--weights", action="store_true", help="Show validator weight details (slower)")
     parser.add_argument("--full-keys", action="store_true", dest="full_keys", help="Show full hotkey/coldkey")
-    parser.add_argument("--sort", default="emission", choices=["emission", "trust"], help="Sort order")
+    parser.add_argument("--sort", default="emission", choices=["emission", "vtrust"], help="Sort order")
     parser.add_argument("--decimals", type=int, default=3, help="Decimal places for rounding")
     parser.add_argument("--block", type=int, default=None, help="Query at specific block")
     parser.add_argument("--network", default="finney", choices=["finney", "test"], help="Bittensor network")
@@ -113,8 +113,13 @@ async def main():
     console = Console()
 
     async with AsyncSubtensor(network=args.network) as subtensor:
-        logger.info(f"Network : {subtensor.chain_endpoint}")
-        logger.info(f"Subnet  : {args.netuid}")
+        logger.info(f"Network  : {subtensor.chain_endpoint}")
+        logger.info(f"Subnet   : {args.netuid}")
+
+        reg_cost = await subtensor.recycle(netuid=args.netuid, block=args.block)
+        if reg_cost is not None:
+            reg_tao = float(reg_cost.tao)
+            logger.info(f"Reg cost : {reg_tao:.4f} τ (${reg_tao * tao_price:,.2f})")
 
         lite = not args.weights
         metagraph = await subtensor.metagraph(args.netuid, lite=lite, block=args.block)
@@ -126,13 +131,6 @@ async def main():
 
         curr_block = metagraph.block
         uids = metagraph.uids.tolist()
-
-        # Trust scores: not populated on AsyncMetagraph, fetch from MetagraphInfo
-        if hasattr(metagraph, 'trust') and len(getattr(metagraph, 'trust', [])) > 0:
-            trust_scores = metagraph.trust
-        else:
-            meta_info = await subtensor.get_metagraph_info(netuid=args.netuid, block=args.block)
-            trust_scores = meta_info.trust if meta_info else []
 
         # Pool info for alpha→TAO conversion
         pool = metagraph.pool
@@ -148,6 +146,9 @@ async def main():
 
         # Block at registration from metagraph
         block_at_reg = metagraph.block_at_registration or []
+
+        # Immunity period (in blocks) for this subnet
+        immunity_period = await subtensor.immunity_period(netuid=args.netuid, block=args.block) or 0
 
         validators = []
         miners = []
@@ -165,7 +166,6 @@ async def main():
             calc_last_update = int(curr_block - last_update)
 
             emission = float(metagraph.E[uid])
-            trust = float(trust_scores[uid]) if uid < len(trust_scores) else 0.0
             vtrust = float(metagraph.validator_trust[uid])
             is_validator = vtrust > 0.01
 
@@ -174,6 +174,16 @@ async def main():
             # Registration info
             reg_block = int(block_at_reg[uid]) if uid < len(block_at_reg) else 0
             since_reg = prettify_time((current_block - reg_block) * BLOCKTIME) if reg_block > 0 else "?"
+
+            # Immunity: neuron is immune while (current_block - reg_block) < immunity_period
+            if reg_block > 0 and immunity_period > 0:
+                blocks_remaining = immunity_period - (current_block - reg_block)
+                if blocks_remaining > 0:
+                    immune_str = prettify_time(blocks_remaining * BLOCKTIME)
+                else:
+                    immune_str = ""
+            else:
+                immune_str = ""
 
             # Daily rewards
             daily_alpha = tempos_per_day * emission
@@ -208,11 +218,11 @@ async def main():
                 "alpha_d": daily_alpha,
                 "tao_d": daily_tao,
                 "usd_d": daily_usd,
-                "trust": trust,
                 "vtrust": vtrust,
                 "coldkey": display_coldkey,
                 "hotkey": display_hotkey,
                 "reg_since": since_reg,
+                "immune": immune_str,
                 "is_mine": is_mine,
                 "take": None,
                 "childkey_take": None,
@@ -236,15 +246,15 @@ async def main():
 
         # Sort
         if args.sort == "emission":
-            sort_key = lambda r: (-r["emission"], -r["trust"])
+            sort_key = lambda r: (-r["emission"], -r["vtrust"])
         else:
-            sort_key = lambda r: (-r["trust"], -r["emission"])
+            sort_key = lambda r: (-r["vtrust"], -r["emission"])
 
         validators.sort(key=sort_key)
         miners.sort(key=sort_key)
 
         # Render
-        def build_table(title: str, rows: list[dict], decimals: int) -> Table:
+        def build_table(title: str, rows: list[dict], decimals: int, show_take: bool = True) -> Table:
             table = Table(
                 title=f"[bold bright_white]{title}[/]",
                 title_style="bold bright_white",
@@ -263,19 +273,20 @@ async def main():
             table.add_column("α/d", justify="right")
             table.add_column("τ/d", justify="right")
             table.add_column("$/d", justify="right", style="bright_magenta")
-            table.add_column("Trust", justify="right")
             table.add_column("VTrust", justify="right")
-            table.add_column("Take %", justify="right")
-            table.add_column("CK Take %", justify="right")
+            if show_take:
+                table.add_column("Take %", justify="right")
+                table.add_column("CK Take %", justify="right")
             table.add_column("Coldkey", style="bright_white")
             table.add_column("Hotkey", style="cyan", no_wrap=True)
             table.add_column("Reg Since")
+            table.add_column("Immune", justify="right", style="yellow")
             table.add_column("Mine", justify="center")
 
             for idx, r in enumerate(rows, start=1):
                 style = "bold bright_green" if r["is_mine"] else ""
 
-                table.add_row(
+                cells = [
                     str(idx),
                     str(r["uid"]),
                     r["address"],
@@ -286,22 +297,26 @@ async def main():
                     f"{r['alpha_d']:.{decimals}f}",
                     f"{r['tao_d']:.{decimals}f}",
                     f"{r['usd_d']:.2f}",
-                    f"{r['trust']:.{decimals}f}",
                     f"{r['vtrust']:.{decimals}f}",
-                    f"{r['take']:.1f}" if r.get("take") is not None else "",
-                    f"{r['childkey_take']:.1f}" if r.get("childkey_take") is not None else "",
+                ]
+                if show_take:
+                    cells.append(f"{r['take']:.1f}" if r.get("take") is not None else "")
+                    cells.append(f"{r['childkey_take']:.1f}" if r.get("childkey_take") is not None else "")
+                cells.extend([
                     r["coldkey"],
                     r["hotkey"],
                     r["reg_since"],
+                    r["immune"],
                     "[bright_green]✓[/bright_green]" if r["is_mine"] else "",
-                    style=style,
-                )
+                ])
+
+                table.add_row(*cells, style=style)
 
             return table
 
-        console.print(build_table(f"Validators — SN{args.netuid}", validators, args.decimals))
+        console.print(build_table(f"Validators — SN{args.netuid}", validators, args.decimals, show_take=True))
         console.print()
-        console.print(build_table(f"Miners — SN{args.netuid}", miners, args.decimals))
+        console.print(build_table(f"Miners — SN{args.netuid}", miners, args.decimals, show_take=False))
 
         # Summary (only count nodes with emission > 0)
         active_validators = [r for r in validators if r["emission"] > 0]
