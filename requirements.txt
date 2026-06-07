@@ -1,5 +1,5 @@
-bittensor @ git+https://github.com/latent-to/bittensor.git@v10.3.0
-bittensor-wallet @ git+https://github.com/latent-to/btwallet.git@v4.0.1
+bittensor @ git+https://github.com/latent-to/bittensor.git@v10.4.0
+bittensor-wallet @ git+https://github.com/latent-to/btwallet.git@v4.1.0
 bittensor-drand @ git+https://github.com/latent-to/bittensor-drand.git@v1.3.0
 
 loguru
