@@ -7,23 +7,29 @@ replicating the same RPC calls as sync_chain (getBlockHash + getBlock + getStora
 Requirements: pip install rich
 
 Usage:
-    python tools/bench_node.py ws://localhost:9944
-    python tools/bench_node.py wss://archive.chain.opentensor.ai:443 ws://localhost:9944
-    python tools/bench_node.py --no-archive ws://localhost:9944
-    python tools/bench_node.py --samples 50 --concurrency 4 ws://localhost:9944
+    python bench_node.py ws://localhost:9944
+    python bench_node.py wss://archive.chain.opentensor.ai:443 ws://localhost:9944
+    python bench_node.py --no-archive ws://localhost:9944
+    python bench_node.py --samples 50 --concurrency 4 --timeout 10 ws://localhost:9944
+    python bench_node.py --json results.json ws://localhost:9944
 """
 
 import argparse
+import http.client
 import json
+import math
 import random
 import ssl
 import statistics
 import sys
+import threading
 import time
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
@@ -39,7 +45,10 @@ SYSTEM_EVENTS_KEY = "0x26aa394eea5630e07c48ae0c9558cef780d41e5e16056765bc8461851
 # Timestamp.Now storage key — sync_chain calls get_timestamp_via_storage()
 TIMESTAMP_NOW_KEY = "0xf0c365c3cf59d671eb72da0e7a4113c49f1f0515f462cdcf84e0f1d6045dfcbb"
 
+TIMEOUT = 30.0  # seconds per RPC call; overridden by --timeout
+
 _ssl_ctx = None
+_tls = threading.local()
 
 
 def _get_ssl_ctx():
@@ -47,6 +56,29 @@ def _get_ssl_ctx():
     if _ssl_ctx is None:
         _ssl_ctx = ssl.create_default_context()
     return _ssl_ctx
+
+
+def _get_conn(url: str) -> tuple[str, http.client.HTTPConnection, str]:
+    """Persistent per-thread connection (keep-alive), mirroring sync_chain's persistent websocket."""
+    parts = urlsplit(url)
+    key = f"{parts.scheme}://{parts.netloc}"
+    conns = getattr(_tls, "conns", None)
+    if conns is None:
+        conns = _tls.conns = {}
+    conn = conns.get(key)
+    if conn is None:
+        if parts.scheme == "https":
+            conn = http.client.HTTPSConnection(parts.hostname, parts.port or 443, timeout=TIMEOUT, context=_get_ssl_ctx())
+        else:
+            conn = http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=TIMEOUT)
+        conns[key] = conn
+    return key, conn, parts.path or "/"
+
+
+def _drop_conn(key: str):
+    conn = _tls.conns.pop(key, None)
+    if conn is not None:
+        conn.close()
 
 
 def ws_to_http(url: str) -> str:
@@ -64,12 +96,31 @@ def node_label(url: str) -> str:
     return url
 
 
+def _post(url: str, payload: bytes) -> bytes:
+    for attempt in (1, 2):
+        key, conn, path = _get_conn(url)
+        try:
+            conn.request("POST", path, body=payload, headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
+            body = resp.read()
+        except TimeoutError:
+            _drop_conn(key)
+            raise
+        except (http.client.HTTPException, OSError):
+            # Stale keep-alive connection: drop it and retry once on a fresh one
+            _drop_conn(key)
+            if attempt == 2:
+                raise
+            continue
+        if resp.status != 200:
+            raise RuntimeError(f"HTTP {resp.status}: {body[:120].decode(errors='replace')}")
+        return body
+    raise AssertionError("unreachable")
+
+
 def rpc_call(url: str, method: str, params=None):
     payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or []}).encode()
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-    ctx = _get_ssl_ctx() if url.startswith("https") else None
-    with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
-        result = json.loads(resp.read())
+    result = json.loads(_post(url, payload))
     if "error" in result:
         raise RuntimeError(f"RPC error: {result['error']}")
     return result.get("result")
@@ -93,6 +144,14 @@ def fetch_full_block(url: str, block_number: int) -> float:
 def benchmark_range(url: str, start: int, end: int, block_numbers: list[int], concurrency: int, progress=None, task_id=None) -> dict:
     timings = []
     errors = 0
+    error_samples: list[str] = []
+
+    def record_error(e: Exception):
+        nonlocal errors
+        errors += 1
+        msg = (str(e) or type(e).__name__)[:160]
+        if len(error_samples) < 3 and msg not in error_samples:
+            error_samples.append(msg)
 
     wall_start = time.perf_counter()
 
@@ -100,8 +159,8 @@ def benchmark_range(url: str, start: int, end: int, block_numbers: list[int], co
         for bn in block_numbers:
             try:
                 timings.append(fetch_full_block(url, bn))
-            except Exception:
-                errors += 1
+            except Exception as e:
+                record_error(e)
             if progress and task_id is not None:
                 progress.advance(task_id)
     else:
@@ -110,24 +169,26 @@ def benchmark_range(url: str, start: int, end: int, block_numbers: list[int], co
             for fut in as_completed(futures):
                 try:
                     timings.append(fut.result())
-                except Exception:
-                    errors += 1
+                except Exception as e:
+                    record_error(e)
                 if progress and task_id is not None:
                     progress.advance(task_id)
 
     wall_elapsed = time.perf_counter() - wall_start
 
     if not timings:
-        return {"label": format_range_label(start, end), "error": "all queries failed", "errors": errors}
+        return {"label": format_range_label(start, end), "error": "all queries failed", "errors": errors, "error_samples": error_samples}
 
     timings.sort()
     return {
         "label": format_range_label(start, end),
         "samples": len(timings),
         "errors": errors,
+        "error_samples": error_samples,
         "avg_ms": statistics.mean(timings) * 1000,
         "median_ms": statistics.median(timings) * 1000,
-        "p95_ms": timings[int(len(timings) * 0.95)] * 1000 if len(timings) >= 5 else timings[-1] * 1000,
+        # Nearest-rank p95 (the old int(n*0.95) returned the max for the default 20 samples)
+        "p95_ms": timings[min(len(timings) - 1, math.ceil(len(timings) * 0.95) - 1)] * 1000,
         "min_ms": timings[0] * 1000,
         "max_ms": timings[-1] * 1000,
         "blocks_per_sec": len(timings) / wall_elapsed,
@@ -167,10 +228,12 @@ def bps_style(bps: float) -> str:
 
 def print_header(urls: list[str], heads: dict[str, int], archive: bool, samples: int, concurrency: int):
     lines = []
+    head_max = max(heads.values())
     for url in urls:
         head = heads.get(url, "?")
         head_str = f"{head:,}" if isinstance(head, int) else head
-        lines.append(f"[cyan]{node_label(url)}[/]  head: {head_str}")
+        behind = f"  [yellow]({head_max - head:,} behind)[/]" if isinstance(head, int) and head_max - head > 256 else ""
+        lines.append(f"[cyan]{node_label(url)}[/]  head: {head_str}{behind}")
     lines.append("")
     lines.append(f"Mode:        [bold]{'archive (full history)' if archive else 'recent blocks only'}[/]")
     lines.append(f"Samples:     {samples} random blocks per range")
@@ -192,7 +255,9 @@ def build_range_table(label: str, results_by_url: dict[str, dict]) -> Table:
     for url, result in results_by_url.items():
         name = node_label(url)
         if "error" in result:
-            table.add_row(name, "[red]FAIL[/]", "-", "-", "-", "-", str(result.get("errors", "")))
+            status = "[yellow]SKIP[/]" if result["error"] == "not synced" else "[red]FAIL[/]"
+            err_count = result.get("errors", 0)
+            table.add_row(name, status, "-", "-", "-", "-", f"[red]{err_count}[/]" if err_count else "")
             continue
 
         bps = result["blocks_per_sec"]
@@ -284,30 +349,44 @@ def build_summary_table(all_results: dict[str, list[dict]]) -> Table:
 
 
 def main():
+    global TIMEOUT
+
     parser = argparse.ArgumentParser(description="Benchmark subtensor node block query performance")
     parser.add_argument("urls", nargs="+", help="Node URLs (ws://, wss://, http://, https://)")
     parser.add_argument("--no-archive", dest="archive", action="store_false", default=True, help="Only test recent blocks")
     parser.add_argument("--samples", type=int, default=20, help="Random blocks per range (default: 20)")
     parser.add_argument("--concurrency", type=int, default=1, help="Parallel requests (default: 1)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
+    parser.add_argument("--timeout", type=float, default=30, help="Per-RPC timeout in seconds (default: 30)")
+    parser.add_argument("--json", dest="json_out", metavar="PATH", default=None, help="Write results to PATH as JSON")
     args = parser.parse_args()
 
+    TIMEOUT = args.timeout
     urls = [ws_to_http(u) for u in args.urls]
 
     if args.seed is not None:
         random.seed(args.seed)
 
-    # Get chain head from each node
+    # Get chain head from each node (in parallel); drop unreachable nodes
     heads: dict[str, int] = {}
+    failures: dict[str, Exception] = {}
     with console.status("[bold blue]Connecting to nodes..."):
-        for url in urls:
-            try:
-                heads[url] = get_chain_head(url)
-            except Exception as e:
-                console.print(f"[red]Failed to connect to {node_label(url)}: {e}[/]")
-                sys.exit(1)
+        with ThreadPoolExecutor(max_workers=len(urls)) as pool:
+            futures = {pool.submit(get_chain_head, url): url for url in urls}
+            for fut in as_completed(futures):
+                url = futures[fut]
+                try:
+                    heads[url] = fut.result()
+                except Exception as e:
+                    failures[url] = e
 
-    head = min(heads.values())
+    for url, exc in failures.items():
+        console.print(f"[red]Failed to connect to {node_label(url)}: {escape(str(exc) or type(exc).__name__)}[/]")
+    urls = [u for u in urls if u in heads]
+    if not urls:
+        sys.exit(1)
+
+    head = max(heads.values())
 
     print_header(urls, heads, args.archive, args.samples, args.concurrency)
 
@@ -317,15 +396,20 @@ def main():
         start = max(0, head - 256)
         ranges = [(start, head)]
 
+    # Shared random samples per range, so every node is measured on the same blocks.
+    # The last range uses each node's own latest blocks (sequential, not random).
     range_blocks = {}
-    for s, e in ranges:
-        if (s, e) == ranges[-1]:
-            # Last range: use the N most recent blocks (sequential, not random)
-            recent_start = max(s, head - args.samples + 1)
-            range_blocks[(s, e)] = list(range(recent_start, head + 1))
-        else:
-            range_blocks[(s, e)] = sample_blocks_for_range(s, e, args.samples)
-    total_queries = sum(len(b) for b in range_blocks.values()) * len(urls)
+    for s, e in ranges[:-1]:
+        range_blocks[(s, e)] = sample_blocks_for_range(s, e, args.samples)
+    latest_blocks = {url: list(range(max(0, heads[url] - args.samples + 1), heads[url] + 1)) for url in urls}
+
+    def blocks_for(url: str, s: int, e: int, is_last: bool) -> list[int]:
+        if is_last:
+            return latest_blocks[url]
+        # A node that lags behind only gets the blocks it actually has
+        return [b for b in range_blocks[(s, e)] if b <= heads[url]]
+
+    total_queries = sum(len(blocks_for(url, s, e, (s, e) == ranges[-1])) for s, e in ranges for url in urls)
 
     all_results: dict[str, list[dict]] = {url: [] for url in urls}
 
@@ -341,26 +425,39 @@ def main():
         task = progress.add_task("Benchmarking", total=total_queries)
 
         for start, end in ranges:
-            blocks = range_blocks[(start, end)]
             is_last = (start, end) == ranges[-1]
-            label = f"latest {len(blocks)}" if is_last else format_range_label(start, end)
+            label = f"latest {args.samples}" if is_last else format_range_label(start, end)
             progress.update(task, description=f"[bold blue]{label}[/]")
 
-            # Benchmark all nodes in parallel for this range
+            results_for_range: dict[str, dict] = {}
+
+            # Benchmark all nodes in parallel for this range; skip nodes not synced this far
             with ThreadPoolExecutor(max_workers=len(urls)) as pool:
-                futures = {pool.submit(benchmark_range, url, start, end, blocks, args.concurrency, progress, task): url for url in urls}
-                results_for_range: dict[str, dict] = {}
+                futures = {}
+                for url in urls:
+                    blocks = blocks_for(url, start, end, is_last)
+                    if not blocks:
+                        results_for_range[url] = {
+                            "label": format_range_label(start, end),
+                            "error": "not synced",
+                            "errors": 0,
+                            "error_samples": [f"not synced — node head is {heads[url]:,}"],
+                        }
+                        continue
+                    futures[pool.submit(benchmark_range, url, start, end, blocks, args.concurrency, progress, task)] = url
                 for fut in as_completed(futures):
-                    url = futures[fut]
-                    result = fut.result()
-                    all_results[url].append(result)
-                    results_for_range[url] = result
+                    results_for_range[futures[fut]] = fut.result()
 
             # Preserve URL ordering for display
             results_for_range = {url: results_for_range[url] for url in urls}
+            for url, result in results_for_range.items():
+                all_results[url].append(result)
 
             progress.stop()
             console.print(build_range_table(label, results_for_range))
+            for url, result in results_for_range.items():
+                for msg in result.get("error_samples", []):
+                    console.print(f"  [dim]{node_label(url)}: [red]{escape(msg)}[/red][/dim]")
             console.print()
             progress.start()
 
@@ -368,6 +465,24 @@ def main():
     table = build_summary_table(all_results)
     console.print(table)
     console.print()
+
+    if args.json_out:
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "config": {
+                "archive": args.archive,
+                "samples": args.samples,
+                "concurrency": args.concurrency,
+                "seed": args.seed,
+                "timeout": args.timeout,
+            },
+            "heads": {node_label(u): heads[u] for u in urls},
+            "results": {node_label(u): all_results[u] for u in urls},
+        }
+        with open(args.json_out, "w") as f:
+            json.dump(payload, f, indent=2)
+        console.print(f"Results written to [bold]{args.json_out}[/]")
+        console.print()
 
 
 if __name__ == "__main__":
