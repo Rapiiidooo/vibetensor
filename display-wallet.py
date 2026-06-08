@@ -18,7 +18,7 @@ from loguru import logger
 from rich.console import Console
 from rich.table import Table
 
-from base import get_live_price
+from base import fetch_delegate_identities, get_live_price
 
 load_dotenv()
 
@@ -55,7 +55,7 @@ async def main():
             subtensor.get_balance(coldkey_ss58),
             subtensor.get_stake_info_for_coldkey(coldkey_ss58),
             subtensor.all_subnets(),
-            subtensor.get_delegate_identities(),
+            fetch_delegate_identities(subtensor),
         )
 
         dynamic_info_by_netuid = {d.netuid: d for d in dynamic_infos}

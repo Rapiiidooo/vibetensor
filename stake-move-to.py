@@ -8,7 +8,7 @@ import time
 
 from loguru import logger
 
-from base import rao_to_tao
+from base import fetch_delegate_identities_sync, rao_to_tao
 from bittensor import Subtensor
 from bittensor_wallet import Wallet
 
@@ -146,7 +146,7 @@ if __name__ == "__main__":
             sub = Subtensor(network=network, log_verbose=False)
             metagraph = sub.metagraph(netuid=netuid)
 
-            delegate_identities = sub.get_delegate_identities()
+            delegate_identities = fetch_delegate_identities_sync(sub)
 
             print(f"\nValidators on subnet {netuid} (vtrust > 0):")
             for uid, hotkey in enumerate(metagraph.hotkeys):

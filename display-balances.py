@@ -19,7 +19,7 @@ from loguru import logger
 from rich.console import Console
 from rich.table import Table
 
-from base import get_live_price
+from base import fetch_delegate_identities, get_live_price
 
 load_dotenv()
 
@@ -156,7 +156,7 @@ async def main():
 
         free_balances, delegate_identities = await asyncio.gather(
             subtensor.get_balances(*coldkeys),
-            subtensor.get_delegate_identities(),
+            fetch_delegate_identities(subtensor),
         )
 
         stake_tasks = {

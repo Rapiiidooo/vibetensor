@@ -163,3 +163,93 @@ def tao_to_rao(tao):
     if tao is None:
         return None
     return int((Decimal(tao) * RAO_PER_TAO).to_integral_value())
+
+
+# ---------------------------------------------------------------------
+# Delegate identities (resilient to non-utf8 on-chain identity bytes)
+# ---------------------------------------------------------------------
+
+
+class DelegateIdentity:
+    """Minimal delegate identity holder (only `.name` is consumed by callers)."""
+
+    __slots__ = ("name",)
+
+    def __init__(self, name: str):
+        self.name = name
+
+
+def _decode_identity_name(info: dict) -> str:
+    """Tolerantly decode the `name` field of an on-chain identity dict.
+
+    bittensor's built-in ``decode_hex_identity_dict`` does a strict utf-8 decode
+    and raises on the first delegate whose identity bytes aren't valid utf-8,
+    which aborts the whole ``get_delegate_identities`` call. We decode only the
+    name, replacing undecodable bytes instead of crashing.
+    """
+    value = info.get("name", "")
+    if isinstance(value, dict):
+        value = next(iter(value.values()), "")
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", "replace")
+    if isinstance(value, str) and value.startswith("0x"):
+        try:
+            return bytes.fromhex(value.removeprefix("0x")).decode("utf-8", "replace")
+        except ValueError:
+            return ""
+    return value if isinstance(value, str) else ""
+
+
+def _identity_from_raw(raw) -> "DelegateIdentity | None":
+    info = getattr(raw, "value", raw)
+    if isinstance(info, dict):
+        return DelegateIdentity(_decode_identity_name(info))
+    return None
+
+
+async def fetch_delegate_identities(subtensor) -> dict:
+    """Resilient async replacement for ``AsyncSubtensor.get_delegate_identities()``.
+
+    Returns ``{coldkey_ss58: DelegateIdentity}``, skipping any entry that fails to
+    decode rather than aborting the entire query.
+    """
+    identities: dict = {}
+    try:
+        result = await subtensor.substrate.query_map(
+            module="SubtensorModule",
+            storage_function="IdentitiesV2",
+        )
+    except Exception as e:
+        logger.warning(f"Could not fetch delegate identities: {e}")
+        return identities
+
+    async for ss58_address, raw in result:
+        try:
+            identity = _identity_from_raw(raw)
+            if identity is not None:
+                identities[ss58_address] = identity
+        except Exception as e:
+            logger.debug(f"identity decode failed for {ss58_address[:8]}...: {e}")
+    return identities
+
+
+def fetch_delegate_identities_sync(subtensor) -> dict:
+    """Resilient sync counterpart for ``Subtensor.get_delegate_identities()``."""
+    identities: dict = {}
+    try:
+        result = subtensor.substrate.query_map(
+            module="SubtensorModule",
+            storage_function="IdentitiesV2",
+        )
+    except Exception as e:
+        logger.warning(f"Could not fetch delegate identities: {e}")
+        return identities
+
+    for ss58_address, raw in result:
+        try:
+            identity = _identity_from_raw(raw)
+            if identity is not None:
+                identities[ss58_address] = identity
+        except Exception as e:
+            logger.debug(f"identity decode failed for {ss58_address[:8]}...: {e}")
+    return identities
