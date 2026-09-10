@@ -1,6 +1,6 @@
 # Move all alpha stake from one hotkey to another (same coldkey)
 #
-# python stake-move-to.py --network test --wallet testnet-holding-00 --dest-hotkey <DEST_HOTKEY_SS58> [--dest-netuid <NETUID>] [--standalone]
+# python stake-move-to.py --network test --wallet <WALLET> --dest-hotkey <DEST_HOTKEY_SS58> [--dest-netuid <NETUID>] [--standalone]
 
 import argparse
 import sys
@@ -8,7 +8,7 @@ import time
 
 from loguru import logger
 
-from base import fetch_delegate_identities_sync, rao_to_tao
+from base import alpha_to_tao, fetch_delegate_identities_sync, rao_to_tao
 from bittensor import Subtensor
 from bittensor_wallet import Wallet
 
@@ -35,7 +35,7 @@ def collect_eligible_stakes(stakes, dynamic_info_by_netuid, dest_hotkey, dest_ne
             continue
 
         pool = dynamic_info_by_netuid.get(netuid)
-        tao_value = pool.alpha_to_tao(stake.stake)
+        tao_value = alpha_to_tao(pool, stake.stake)
 
         if stake.stake.tao < MIN_ALPHA or tao_value.tao < MIN_TAO:
             continue

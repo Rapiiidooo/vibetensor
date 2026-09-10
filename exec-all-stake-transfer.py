@@ -11,7 +11,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from base import get_live_price
+from base import alpha_to_tao, get_live_price
 from bittensor import Subtensor
 from bittensor_wallet import Wallet
 
@@ -99,7 +99,7 @@ def collect_eligible_stakes(stakes, dynamic_info_by_netuid, subtensor, transfer_
         if pool is None:
             continue
 
-        tao_value = pool.alpha_to_tao(stake.stake)
+        tao_value = alpha_to_tao(pool, stake.stake)
         if stake.stake.tao < MIN_ALPHA or tao_value.tao < MIN_TAO:
             continue
 

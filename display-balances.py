@@ -19,7 +19,7 @@ from loguru import logger
 from rich.console import Console
 from rich.table import Table
 
-from base import fetch_delegate_identities, get_live_price
+from base import alpha_to_tao, fetch_delegate_identities, get_live_price
 
 load_dotenv()
 
@@ -78,7 +78,7 @@ async def compute_wallet_stakes(
             continue
 
         alpha_value = Balance.from_rao(int(stake.stake.rao)).set_unit(stake.netuid)
-        tao_value = pool.alpha_to_tao(alpha_value)
+        tao_value = alpha_to_tao(pool, alpha_value)
         total_tao += float(tao_value.tao)
 
         if stake.netuid == 0:
@@ -237,7 +237,7 @@ async def main():
                         continue
 
                     alpha_value = Balance.from_rao(int(stake.stake.rao)).set_unit(stake.netuid)
-                    tao_val = pool.alpha_to_tao(alpha_value)
+                    tao_val = alpha_to_tao(pool, alpha_value)
                     stake_usd = float(tao_val.tao) * tao_price
 
                     if not args.all and stake_usd < args.min_usd:

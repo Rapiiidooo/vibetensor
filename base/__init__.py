@@ -127,6 +127,20 @@ def get_live_price(coin="bittensor", currency="usd"):
         return None
 
 
+def alpha_to_tao(pool, alpha):
+    """TAO value of an alpha balance — unlike `DynamicInfo.alpha_to_tao()`, correct for root.
+
+    That method multiplies by `pool.price`, and for netuid 0 the SDK fills `price` with a
+    meaningless `tao_in / alpha_in` ratio (~4) instead of 1. Root alpha is 1:1 with TAO, so every
+    caller that can see a root position must go through this helper or it overstates root ~4x.
+    """
+    if isinstance(alpha, (int, float, Decimal)):
+        alpha = bittensor.Balance.from_tao(float(alpha))
+    if pool.netuid == 0:
+        return bittensor.Balance.from_rao(int(alpha.rao))
+    return pool.alpha_to_tao(alpha)
+
+
 def block_to_time_duration(blocks: int) -> str:
     seconds = blocks * bittensor.BLOCKTIME
     delta = datetime.timedelta(seconds=seconds)

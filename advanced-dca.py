@@ -1,5 +1,5 @@
 # CLI-only:
-#   python advanced-dca.py --network finney --wallet hot-trading --hotkey 5..... --netuids 64 19 --amount 0.25 --tempo 3600 --tolerance 0.02 --dry-run
+#   python advanced-dca.py --network finney --wallet <WALLET> --hotkey 5..... --netuids 64 19 --amount 0.25 --tempo 3600 --tolerance 0.02 --dry-run
 # Strategy file:
 #   python advanced-dca.py --strategy strategies/example.yml
 #   python advanced-dca.py --strategy strategies/example.yml --dry-run --max-iterations 3
